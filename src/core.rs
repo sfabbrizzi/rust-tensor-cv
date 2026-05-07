@@ -91,7 +91,56 @@ impl TensorShape {
         new_strides.extend_from_slice(&self.strides[end + 1..]);
 
         TensorShape { shape: new_shape, strides: new_strides }
-    }    
+    }
+
+    // Splits a dimension into a compatible higher number of dimensions.
+    // If 0 is passed into shape it acts as a wildcard and the function
+    // computes the right dimension. Only one wildcard can be passed.
+    pub fn split(&self, dim: usize, shape: &[usize]) -> Self {
+        if dim >= self.shape.len() {
+            panic!("Dimension index out of bounds");
+        }
+        
+        let original_size = self.shape[dim];
+
+        // Calculate the product of non-zero sizes and find wildcard
+        let mut non_zero_product = 1usize;
+        let mut zero_index = None;
+
+        for (i, &size) in shape.iter().enumerate() {
+            if size == 0 {
+                if zero_index.is_some() {
+                    panic!("Cannot have more than one wildcard (0) in split sizes");
+                }
+                zero_index = Some(i);
+            } else {
+                non_zero_product *= size;
+            }
+        }
+
+        // Create the final sizes, inferring wildcards
+        let mut final_sizes = shape.to_vec();
+        if let Some(zero_index) = zero_index {
+            if original_size % non_zero_product != 0 {
+                panic!(
+                    "Cannot split dimension of size {} into sizes {:?}",
+                    original_size, shape
+                );
+            }
+            let inferred_size = original_size / non_zero_product;
+            final_sizes[zero_index] = inferred_size;
+        }
+
+        let mut new_shape = Vec::<usize>::with_capacity(self.shape.len() - 1 + shape.len());
+
+        new_shape.extend_from_slice(&self.shape[..dim]);
+        new_shape.extend_from_slice(&final_sizes);
+        if dim + 1 < self.shape.len() {
+            new_shape.extend_from_slice(&self.shape[dim+1..]);
+        }
+
+        TensorShape::new(new_shape)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -193,6 +242,14 @@ impl<T: Clone> Tensor<T> {
     pub fn merge(&self, to_merge: RangeInclusive<usize>) -> Self {
         Tensor { 
             shape: self.shape.merge(to_merge),
+            storage: self.storage.clone() // Not efficient, need to implement storage as Arc
+        }
+    }
+
+    // Splits one dimension into a higher number of complatible dimensions.
+    pub fn split(&self, dim: usize, shape: &[usize]) -> Self {
+        Tensor { 
+            shape: self.shape.split(dim, shape),
             storage: self.storage.clone() // Not efficient, need to implement storage as Arc
         }
     }
@@ -413,6 +470,65 @@ mod tests {
         let merged_shape = shape.merge(0..=3);
         assert_eq!(merged_shape.shape, vec![120]);
         assert_eq!(merged_shape.strides, Vec::<usize>::from_iter([1]));
+    }
+
+    #[test]
+    fn test_split() {
+        let shape = TensorShape::new(vec![2, 12, 5]);
+        let split_shape = shape.split(1, &[3, 4]);
+        assert_eq!(split_shape.shape, vec![2, 3, 4, 5]);
+        assert_eq!(split_shape.strides, vec![60, 20, 5, 1]);
+
+        let shape = TensorShape::new(vec![24]);
+        let split_shape = shape.split(0, &[2, 3, 0]);
+        assert_eq!(split_shape.shape, vec![2, 3, 4]);
+        assert_eq!(split_shape.strides, vec![12, 4, 1]);
+
+        let shape = TensorShape::new(vec![2, 3, 24]);
+        let split_shape = shape.split(2, &[4, 6]);
+        assert_eq!(split_shape.shape, vec![2, 3, 4, 6]);
+        assert_eq!(split_shape.strides, vec![72, 24, 6, 1]);
+
+        let shape = TensorShape::new(vec![12, 3, 4]);
+        let split_shape = shape.split(0, &[3, 4]);
+        assert_eq!(split_shape.shape, vec![3, 4, 3, 4]);
+        assert_eq!(split_shape.strides, vec![48, 12, 4, 1]);
+
+        let shape = TensorShape::new(vec![30]);
+        let split_shape = shape.split(0, &[5, 6]);
+        assert_eq!(split_shape.shape, vec![5, 6]);
+        assert_eq!(split_shape.strides, vec![6, 1]);
+
+        let shape = TensorShape::new(vec![2, 60, 3]);
+        let split_shape = shape.split(1, &[4, 0, 5]);
+        assert_eq!(split_shape.shape, vec![2, 4, 3, 5, 3]);
+        assert_eq!(split_shape.strides, vec![180, 45, 15, 3, 1]);
+
+        let original_shape = TensorShape::new(vec![6, 8]);
+        let split_shape = original_shape.split(0, &[2, 3]).split(2, &[4, 2]);
+
+        assert_eq!(
+            original_shape.ravel_index(&[0, 0]),
+            split_shape.ravel_index(&[0, 0, 0, 0])
+        );
+        assert_eq!(
+            original_shape.ravel_index(&[2, 6]),
+            split_shape.ravel_index(&[0, 2, 3, 0])
+        );
+        assert_eq!(
+            original_shape.ravel_index(&[5, 7]),
+            split_shape.ravel_index(&[1, 2, 3, 1])
+        );
+
+        let shape = TensorShape::new(vec![4]);
+        let split_shape = shape.split(0, &[4, 1]);
+        assert_eq!(split_shape.shape, vec![4, 1]);
+        assert_eq!(split_shape.strides, vec![1, 1]);
+
+        let shape = TensorShape::new(vec![2, 3, 4]);
+        let split_shape = shape.split(1, &[1, 3]);
+        assert_eq!(split_shape.shape, vec![2, 1, 3, 4]);
+        assert_eq!(split_shape.strides, vec![12, 12, 4, 1]);
     }
 
 }
