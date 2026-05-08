@@ -1,11 +1,11 @@
+use num_traits::{One, Zero};
 use std::ops::{Index, IndexMut, RangeInclusive};
-use num_traits::{Zero, One};
 
 #[derive(Debug, Clone, PartialEq)]
 /// A struct representing the shape of a tensor, which is a vector of dimensions.
 pub struct TensorShape {
     shape: Vec<usize>,
-    strides: Vec<usize> // added to optimize rveling and unraveling and allow view ops.
+    strides: Vec<usize>, // added to optimize rveling and unraveling and allow view ops.
 }
 
 impl TensorShape {
@@ -42,11 +42,11 @@ impl TensorShape {
         if self.shape.is_empty() {
             return vec![];
         }
-        
+
         let mut indices: Vec<usize> = vec![0 as usize; self.shape.len()];
         let mut remaining_index = linear_index;
 
-        for (i, &stride) in self.strides.iter().enumerate()  {
+        for (i, &stride) in self.strides.iter().enumerate() {
             indices[i] = remaining_index / stride;
             remaining_index %= stride;
         }
@@ -56,15 +56,9 @@ impl TensorShape {
 
     /// Permutes the dimensions of the tensor according to the given order of indices.
     pub fn permute(&self, permuted_indices: &[usize]) -> Self {
-        let shape = permuted_indices
-            .iter()
-            .map(|x| self.shape[*x])
-            .collect();
+        let shape = permuted_indices.iter().map(|x| self.shape[*x]).collect();
 
-        let strides = permuted_indices
-            .iter()
-            .map(|x| self.strides[*x])
-            .collect();
+        let strides = permuted_indices.iter().map(|x| self.strides[*x]).collect();
 
         TensorShape { shape, strides }
     }
@@ -72,13 +66,14 @@ impl TensorShape {
     // Merges consecutive dimensions of the tensor.
     pub fn merge(&self, to_merge: RangeInclusive<usize>) -> Self {
         let (start, end) = (*to_merge.start(), *to_merge.end());
-        assert!(start <= end && end < self.shape.len(),
+        assert!(
+            start <= end && end < self.shape.len(),
             "Invalid range for merging dimensions"
         );
 
         let merged_size = self.shape[to_merge.clone()].iter().product();
         let merged_stride = self.strides[end];
-        
+
         let mut new_shape = Vec::<usize>::with_capacity(self.shape.len() - (end - start));
         let mut new_strides = Vec::<usize>::with_capacity(self.strides.len() - (end - start));
 
@@ -90,7 +85,10 @@ impl TensorShape {
         new_strides.push(merged_stride);
         new_strides.extend_from_slice(&self.strides[end + 1..]);
 
-        TensorShape { shape: new_shape, strides: new_strides }
+        TensorShape {
+            shape: new_shape,
+            strides: new_strides,
+        }
     }
 
     // Splits a dimension into a compatible higher number of dimensions.
@@ -100,7 +98,7 @@ impl TensorShape {
         if dim >= self.shape.len() {
             panic!("Dimension index out of bounds");
         }
-        
+
         let original_size = self.shape[dim];
 
         // Calculate the product of non-zero sizes and find wildcard
@@ -136,7 +134,7 @@ impl TensorShape {
         new_shape.extend_from_slice(&self.shape[..dim]);
         new_shape.extend_from_slice(&final_sizes);
         if dim + 1 < self.shape.len() {
-            new_shape.extend_from_slice(&self.shape[dim+1..]);
+            new_shape.extend_from_slice(&self.shape[dim + 1..]);
         }
 
         TensorShape::new(new_shape)
@@ -146,7 +144,7 @@ impl TensorShape {
 #[derive(Debug, Clone, PartialEq)]
 /// A struct that stores the data of a tensor as a linear vector.
 pub struct TensorStorage<T> {
-    data: Vec<T>
+    data: Vec<T>,
 }
 
 impl<T> Index<usize> for TensorStorage<T> {
@@ -158,7 +156,6 @@ impl<T> Index<usize> for TensorStorage<T> {
 }
 
 impl<T> IndexMut<usize> for TensorStorage<T> {
-
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         &mut self.data[index]
     }
@@ -181,10 +178,10 @@ impl<T: One + Clone> TensorStorage<T> {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-/// A struct representing a multi-dimensional array (tensor). 
+/// A struct representing a multi-dimensional array (tensor).
 /// The shape od the tensor is stored in a TensorShaper struct whereas the data is stored
 /// in a TensorStorage struct as a liner vector (row-major order).
-/// 
+///
 /// # Example
 /// ```rust
 /// use rustcv::core::Tensor;
@@ -193,7 +190,7 @@ impl<T: One + Clone> TensorStorage<T> {
 /// ```
 pub struct Tensor<T> {
     shape: TensorShape,
-    storage: TensorStorage<T>
+    storage: TensorStorage<T>,
 }
 
 impl<T> Index<&[usize]> for Tensor<T> {
@@ -205,7 +202,6 @@ impl<T> Index<&[usize]> for Tensor<T> {
 }
 
 impl<T> IndexMut<&[usize]> for Tensor<T> {
-
     fn index_mut(&mut self, indices: &[usize]) -> &mut Self::Output {
         &mut self.storage[self.shape.ravel_index(indices)]
     }
@@ -232,25 +228,25 @@ impl<T: One + Clone> Tensor<T> {
 impl<T: Clone> Tensor<T> {
     /// Permutes the dimensions of the tensor according to the given order of indices.
     pub fn permute(&self, permuted_indices: &[usize]) -> Self {
-        Tensor { 
+        Tensor {
             shape: self.shape.permute(permuted_indices),
-            storage: self.storage.clone() // Not efficient, need to implement storage as Arc
+            storage: self.storage.clone(), // Not efficient, need to implement storage as Arc
         }
     }
 
     // Merges consecutive dimensions of the tensor.
     pub fn merge(&self, to_merge: RangeInclusive<usize>) -> Self {
-        Tensor { 
+        Tensor {
             shape: self.shape.merge(to_merge),
-            storage: self.storage.clone() // Not efficient, need to implement storage as Arc
+            storage: self.storage.clone(), // Not efficient, need to implement storage as Arc
         }
     }
 
     // Splits one dimension into a higher number of complatible dimensions.
     pub fn split(&self, dim: usize, shape: &[usize]) -> Self {
-        Tensor { 
+        Tensor {
             shape: self.shape.split(dim, shape),
-            storage: self.storage.clone() // Not efficient, need to implement storage as Arc
+            storage: self.storage.clone(), // Not efficient, need to implement storage as Arc
         }
     }
 }
@@ -262,7 +258,7 @@ mod tests {
 
     #[test]
     fn test_zeroes() {
-        let tensor: Tensor<f32> = Tensor::<f32>::zeroes(vec![3,3,2]);
+        let tensor: Tensor<f32> = Tensor::<f32>::zeroes(vec![3, 3, 2]);
         assert_eq!(tensor.shape.shape, vec![3, 3, 2]);
         assert_eq!(tensor.storage.data.len(), 18);
         assert!(tensor.storage.data.iter().all(|x| *x == 0.0))
@@ -270,8 +266,8 @@ mod tests {
 
     #[test]
     fn test_ones() {
-        let tensor: Tensor<i32> = Tensor::<i32>::ones(vec![1,5,5,3,2]);
-        assert_eq!(tensor.shape.shape, vec![1,5,5,3,2]);
+        let tensor: Tensor<i32> = Tensor::<i32>::ones(vec![1, 5, 5, 3, 2]);
+        assert_eq!(tensor.shape.shape, vec![1, 5, 5, 3, 2]);
         assert_eq!(tensor.storage.data.len(), 150);
         assert!(tensor.storage.data.iter().all(|x| *x == 1))
     }
@@ -329,11 +325,10 @@ mod tests {
         let mut idx = 0;
         for i in 0..3 {
             for j in 0..3 {
-                assert_eq!(shape.ravel_index(&[i,j]), expected[idx]);
+                assert_eq!(shape.ravel_index(&[i, j]), expected[idx]);
                 idx += 1;
             }
         }
-
     }
 
     #[test]
@@ -422,8 +417,8 @@ mod tests {
         let permuted_tensor = tensor.permute(&[1, 0]);
         assert_eq!(permuted_tensor.shape.shape, vec![3, 2]);
         assert_eq!(permuted_tensor.storage.data.len(), 6);
-        assert_eq!(permuted_tensor[&[0,0]], 0);
-        assert_eq!(permuted_tensor[&[1,1]], 0);
+        assert_eq!(permuted_tensor[&[0, 0]], 0);
+        assert_eq!(permuted_tensor[&[1, 1]], 0);
         assert_eq!(permuted_tensor.storage.data.iter().sum::<i32>(), 4);
 
         let mut tensor: Tensor<i32> = Tensor::<i32>::zeroes(vec![2, 3]);
@@ -432,10 +427,9 @@ mod tests {
         let permuted_tensor = tensor.permute(&[1, 0]);
         assert_eq!(permuted_tensor.shape.shape, vec![3, 2]);
         assert_eq!(permuted_tensor.storage.data.len(), 6);
-        assert_eq!(permuted_tensor[&[2,0]], 10);
-        assert_eq!(permuted_tensor[&[1,0]], 8);
+        assert_eq!(permuted_tensor[&[2, 0]], 10);
+        assert_eq!(permuted_tensor[&[1, 0]], 8);
         assert_eq!(permuted_tensor.storage.data.iter().sum::<i32>(), 18);
-
 
         let mut tensor: Tensor<i32> = Tensor::<i32>::zeroes(vec![2, 3, 4]);
         tensor[&[0, 2, 1]] = 10;
@@ -446,7 +440,6 @@ mod tests {
         assert_eq!(permuted_tensor[&[2, 1, 0]], 10);
         assert_eq!(permuted_tensor[&[1, 3, 0]], 8);
         assert_eq!(permuted_tensor.storage.data.iter().sum::<i32>(), 18);
-
     }
 
     #[test]
@@ -530,5 +523,4 @@ mod tests {
         assert_eq!(split_shape.shape, vec![2, 1, 3, 4]);
         assert_eq!(split_shape.strides, vec![12, 12, 4, 1]);
     }
-
 }
