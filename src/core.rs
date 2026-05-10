@@ -6,6 +6,7 @@ use std::ops::{Index, IndexMut, RangeInclusive};
 pub struct TensorShape {
     shape: Vec<usize>,
     strides: Vec<usize>, // added to optimize rveling and unraveling and allow view ops.
+    linear_offset: usize,
 }
 
 impl TensorShape {
@@ -15,7 +16,7 @@ impl TensorShape {
         for i in (0..shape.len().saturating_sub(1)).rev() {
             strides[i] = strides[i + 1] * shape[i + 1];
         }
-        TensorShape { shape, strides }
+        TensorShape { shape, strides, linear_offset: 0 }
     }
 
     /// Returns the total number of elements in the tensor, which is the product of the dimensions.
@@ -60,7 +61,7 @@ impl TensorShape {
 
         let strides = permuted_indices.iter().map(|x| self.strides[*x]).collect();
 
-        TensorShape { shape, strides }
+        TensorShape { shape, strides, linear_offset: self.linear_offset }
     }
 
     // Merges consecutive dimensions of the tensor.
@@ -88,6 +89,7 @@ impl TensorShape {
         TensorShape {
             shape: new_shape,
             strides: new_strides,
+            linear_offset: self.linear_offset
         }
     }
 
@@ -138,6 +140,34 @@ impl TensorShape {
         }
 
         TensorShape::new(new_shape)
+    }
+
+    pub fn reshape(&self, _shape: &[usize]) -> Self {
+        unimplemented!();
+    }
+
+    pub fn slice(&self, dim: usize, range: RangeInclusive<usize>) -> Self {
+        if dim >= self.shape.len() {
+            panic!("Dimension index out of bounds");
+        } // TODO: remove panics!
+
+        let start = *range.start();
+        let end = *range.end();
+
+        if start > end || end >= self.shape[dim] {
+            panic!("Invalid slice range for dimension {}", dim);
+        }
+
+        let mut new_shape = self.shape.clone();
+        new_shape[dim] = end - start +1;
+
+        let additional_offset =  start * self.strides[dim];
+        
+        TensorShape {
+            shape: new_shape,
+            strides: self.strides.clone(),
+            linear_offset: self.linear_offset + additional_offset
+        }
     }
 }
 
@@ -247,6 +277,17 @@ impl<T: Clone> Tensor<T> {
         Tensor {
             shape: self.shape.split(dim, shape),
             storage: self.storage.clone(), // Not efficient, need to implement storage as Arc
+        }
+    }
+
+    pub fn reshape(&self, _shape: &[usize]) -> Self {
+        unimplemented!();
+    }
+
+    fn slice(&self, dim: usize, range: RangeInclusive<usize>) -> Self {
+        Tensor {
+            shape: self.shape.slice(dim, range),
+            storage: self.storage.clone(),
         }
     }
 }
@@ -522,5 +563,14 @@ mod tests {
         let split_shape = shape.split(1, &[1, 3]);
         assert_eq!(split_shape.shape, vec![2, 1, 3, 4]);
         assert_eq!(split_shape.strides, vec![12, 12, 4, 1]);
+    }
+
+    #[test]
+    fn test_slice() {
+        let shape = TensorShape::new(vec![2, 6, 3]);
+        let sliced_shape = shape.slice(1, 1..=3);
+        assert_eq!(sliced_shape.shape, vec![2, 3, 3]);
+        assert_eq!(sliced_shape.strides, shape.strides);
+        assert_eq!(sliced_shape.linear_offset, 1)
     }
 }

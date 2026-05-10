@@ -12,7 +12,7 @@ The aim of this project is to create a Rust library for computer vision tasks. T
         - [x] merge
         - [x] split
         - [ ] reshape
-        - [ ] slice
+        - [x] slice
         - [ ] skip
     - [ ] data operations
 - [ ] Image processing and manipulation
