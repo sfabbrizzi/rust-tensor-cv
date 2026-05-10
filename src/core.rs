@@ -30,12 +30,13 @@ impl TensorShape {
             panic!("Indices needs to match shape")
         }
 
-        indices
-            .iter()
-            .zip(self.strides.iter())
-            .rev()
-            .map(|(&idx, &stride)| idx * stride)
-            .sum()
+        self.linear_offset
+            + indices
+                .iter()
+                .zip(self.strides.iter())
+                .rev()
+                .map(|(&idx, &stride)| idx * stride)
+                .sum::<usize>()
     }
 
     /// Converts a linear index to the corresponding multi-dimensional indices.
@@ -64,7 +65,7 @@ impl TensorShape {
         TensorShape { shape, strides, linear_offset: self.linear_offset }
     }
 
-    // Merges consecutive dimensions of the tensor.
+    /// Merges consecutive dimensions of the tensor.
     pub fn merge(&self, to_merge: RangeInclusive<usize>) -> Self {
         let (start, end) = (*to_merge.start(), *to_merge.end());
         assert!(
@@ -93,9 +94,9 @@ impl TensorShape {
         }
     }
 
-    // Splits a dimension into a compatible higher number of dimensions.
-    // If 0 is passed into shape it acts as a wildcard and the function
-    // computes the right dimension. Only one wildcard can be passed.
+    /// Splits a dimension into a compatible higher number of dimensions.
+    /// If 0 is passed into shape it acts as a wildcard and the function
+    /// computes the right dimension. Only one wildcard can be passed.
     pub fn split(&self, dim: usize, shape: &[usize]) -> Self {
         if dim >= self.shape.len() {
             panic!("Dimension index out of bounds");
@@ -146,6 +147,7 @@ impl TensorShape {
         unimplemented!();
     }
 
+    /// Slices the tensor over a dimension.
     pub fn slice(&self, dim: usize, range: RangeInclusive<usize>) -> Self {
         if dim >= self.shape.len() {
             panic!("Dimension index out of bounds");
@@ -168,6 +170,24 @@ impl TensorShape {
             strides: self.strides.clone(),
             linear_offset: self.linear_offset + additional_offset
         }
+    }
+
+    /// Skips elements in the tensor over a dimension.
+    pub fn skip(&self, dim: usize, step: usize) -> Self {
+        if dim >= self.shape.len() {
+            panic!("Dimension index out of bounds");
+        } 
+
+        let mut new_shape = self.shape.clone();
+        new_shape[dim] = new_shape[dim].div_ceil(step);
+
+        let mut new_strides = self.strides.clone();
+        new_strides[dim] *= step;
+
+        TensorShape {
+            shape: new_shape,
+            strides: new_strides,
+            linear_offset: self.linear_offset }
     }
 }
 
@@ -264,7 +284,7 @@ impl<T: Clone> Tensor<T> {
         }
     }
 
-    // Merges consecutive dimensions of the tensor.
+    /// Merges consecutive dimensions of the tensor.
     pub fn merge(&self, to_merge: RangeInclusive<usize>) -> Self {
         Tensor {
             shape: self.shape.merge(to_merge),
@@ -272,7 +292,7 @@ impl<T: Clone> Tensor<T> {
         }
     }
 
-    // Splits one dimension into a higher number of complatible dimensions.
+    /// Splits one dimension into a higher number of complatible dimensions.
     pub fn split(&self, dim: usize, shape: &[usize]) -> Self {
         Tensor {
             shape: self.shape.split(dim, shape),
@@ -284,9 +304,18 @@ impl<T: Clone> Tensor<T> {
         unimplemented!();
     }
 
-    fn slice(&self, dim: usize, range: RangeInclusive<usize>) -> Self {
+    /// Slices the tensor over a dimension.
+    pub fn slice(&self, dim: usize, range: RangeInclusive<usize>) -> Self {
         Tensor {
             shape: self.shape.slice(dim, range),
+            storage: self.storage.clone(),
+        }
+    }
+
+    /// Skips elements in the tensor over a dimension.
+    pub fn skip(&self, dim: usize, step: usize) -> Self {
+        Tensor {
+            shape: self.shape.skip(dim, step),
             storage: self.storage.clone(),
         }
     }
@@ -567,10 +596,147 @@ mod tests {
 
     #[test]
     fn test_slice() {
-        let shape = TensorShape::new(vec![2, 6, 3]);
-        let sliced_shape = shape.slice(1, 1..=3);
-        assert_eq!(sliced_shape.shape, vec![2, 3, 3]);
-        assert_eq!(sliced_shape.strides, shape.strides);
-        assert_eq!(sliced_shape.linear_offset, 1)
+        let shape = TensorShape::new(vec![5, 6]);
+        assert_eq!(shape.shape, vec![5, 6]);
+        assert_eq!(shape.strides, vec![6, 1]);
+        assert_eq!(shape.linear_offset, 0);
+
+        let sliced_shape = shape.slice(0, 1..=3).slice(1, 2..=4);
+
+        assert_eq!(sliced_shape.shape, vec![3, 3]);
+        assert_eq!(sliced_shape.strides, vec![6, 1]);
+        assert_eq!(sliced_shape.linear_offset, 1 * 6 + 2 * 1);
+
+        let shape_3d = TensorShape::new(vec![4, 5, 6]);
+        assert_eq!(shape_3d.strides, vec![30, 6, 1]);
+
+        let sliced_3d = shape_3d.slice(0, 1..=2).slice(2, 1..=4);
+
+        assert_eq!(sliced_3d.shape, vec![2, 5, 4]);
+        assert_eq!(sliced_3d.strides, vec![30, 6, 1]);
+        assert_eq!(sliced_3d.linear_offset, 1 * 30 + 1 * 1);
+
+        let shape_1d = TensorShape::new(vec![10]);
+        let sliced_1d = shape_1d.slice(0, 3..=7);
+
+        assert_eq!(sliced_1d.shape, vec![5]);
+        assert_eq!(sliced_1d.strides, vec![1]);
+        assert_eq!(sliced_1d.linear_offset, 3);
+
+        let shape_partial = TensorShape::new(vec![3, 4, 5]);
+        let sliced_partial = shape_partial.slice(1, 1..=2);
+
+        assert_eq!(sliced_partial.shape, vec![3, 2, 5]);
+        assert_eq!(sliced_partial.strides, vec![20, 5, 1]);
+        assert_eq!(sliced_partial.linear_offset, 1 * 5);
+
+        let shape_single = TensorShape::new(vec![5, 5]);
+        let sliced_single = shape_single.slice(0, 2..=2).slice(1, 3..=3);
+
+        assert_eq!(sliced_single.shape, vec![1, 1]);
+        assert_eq!(sliced_single.strides, vec![5, 1]);
+        assert_eq!(sliced_single.linear_offset, 2 * 5 + 3 * 1);
+
+        let original_shape = TensorShape::new(vec![4, 6]);
+        let sliced_test = original_shape.slice(0, 1..=2).slice(1, 2..=4);
+
+        let sliced_flat = sliced_test.ravel_index(&[0, 0]);
+        let original_flat = original_shape.ravel_index(&[1, 2]);
+        assert_eq!(sliced_flat, original_flat);
+
+        let sliced_flat = sliced_test.ravel_index(&[1, 2]);
+        let original_flat = original_shape.ravel_index(&[2, 4]);
+        assert_eq!(sliced_flat, original_flat);
     }
+
+    #[test]
+    fn test_skip() {
+        let shape_1d = TensorShape::new(vec![10]);
+        assert_eq!(shape_1d.strides, vec![1]);
+
+        let skipped_1d = shape_1d.skip(0, 2);
+        assert_eq!(skipped_1d.shape, vec![5]);
+        assert_eq!(skipped_1d.strides, vec![2]);
+        assert_eq!(skipped_1d.linear_offset, 0);
+
+        let shape_1d_odd = TensorShape::new(vec![9]);
+        let skipped_1d_odd = shape_1d_odd.skip(0, 2);
+        assert_eq!(skipped_1d_odd.shape, vec![5]);
+        assert_eq!(skipped_1d_odd.strides, vec![2]);
+
+        let shape_2d = TensorShape::new(vec![6, 8]);
+        assert_eq!(shape_2d.strides, vec![8, 1]);
+
+        let skipped_dim0 = shape_2d.skip(0, 2);
+        assert_eq!(skipped_dim0.shape, vec![3, 8]);
+        assert_eq!(skipped_dim0.strides, vec![16, 1]);
+        assert_eq!(skipped_dim0.linear_offset, 0);
+
+        let skipped_dim1 = shape_2d.skip(1, 3);
+        assert_eq!(skipped_dim1.shape, vec![6, 3]);
+        assert_eq!(skipped_dim1.strides, vec![8, 3]);
+        assert_eq!(skipped_dim1.linear_offset, 0);
+
+        let shape_3d = TensorShape::new(vec![4, 6, 8]);
+        assert_eq!(shape_3d.strides, vec![48, 8, 1]);
+
+        let skipped_3d = shape_3d.skip(1, 2);
+        assert_eq!(skipped_3d.shape, vec![4, 3, 8]);
+        assert_eq!(skipped_3d.strides, vec![48, 16, 1]);
+        assert_eq!(skipped_3d.linear_offset, 0);
+
+        let shape_chain = TensorShape::new(vec![8, 9]);
+        let double_skipped = shape_chain.skip(0, 2).skip(1, 3);
+        assert_eq!(double_skipped.shape, vec![4, 3]);
+        assert_eq!(double_skipped.strides, vec![18, 3]);
+        assert_eq!(double_skipped.linear_offset, 0);
+
+        let shape_noop = TensorShape::new(vec![5, 7]);
+        let no_change = shape_noop.skip(0, 1).skip(1, 1);
+        assert_eq!(no_change.shape, shape_noop.shape);
+        assert_eq!(no_change.strides, shape_noop.strides);
+        assert_eq!(no_change.linear_offset, shape_noop.linear_offset);
+
+        let test_cases = vec![(10, 2, 5), (10, 3, 4), (9, 3, 3), (7, 4, 2), (1, 2, 1)];
+
+        for (original_size, step, expected_size) in test_cases {
+            let shape = TensorShape::new(vec![original_size]);
+            let skipped = shape.skip(0, step);
+            assert_eq!(
+                skipped.shape[0], expected_size,
+                "Failed for {}.div_ceil({}) = {}",
+                original_size, step, expected_size
+            );
+        }
+
+        let shape_with_offset = TensorShape {
+            shape: vec![6, 8],
+            strides: vec![8, 1],
+            linear_offset: 10,
+        };
+
+        let skipped_with_offset = shape_with_offset.skip(0, 3);
+        assert_eq!(skipped_with_offset.shape, vec![2, 8]);
+        assert_eq!(skipped_with_offset.strides, vec![24, 1]);
+        assert_eq!(skipped_with_offset.linear_offset, 10);
+
+        let original_shape = TensorShape::new(vec![6, 8]);
+        let skipped_shape = original_shape.skip(1, 2);
+
+        assert_eq!(skipped_shape.shape, vec![6, 4]);
+        assert_eq!(skipped_shape.strides, vec![8, 2]);
+
+        let skipped_flat = skipped_shape.ravel_index(&[1, 2]);
+        let original_flat = original_shape.ravel_index(&[1, 4]);
+        assert_eq!(skipped_flat, original_flat);
+
+        let skipped_flat = skipped_shape.ravel_index(&[0, 1]);
+        let original_flat = original_shape.ravel_index(&[0, 2]);
+        assert_eq!(skipped_flat, original_flat);
+
+        let skipped_flat = skipped_shape.ravel_index(&[2, 3]);
+        let original_flat = original_shape.ravel_index(&[2, 6]);
+        assert_eq!(skipped_flat, original_flat);
+    }
+
 }
